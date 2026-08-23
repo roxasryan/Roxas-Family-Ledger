@@ -10,7 +10,7 @@ import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 // not bulletproof security, but it keeps casual visitors from landing
 // on your data by guessing an obvious path.
 // ---------------------------------------------------------------------
-const HOUSEHOLD_ID = 'REPLACE_WITH_YOUR_OWN_PRIVATE_ID';
+const HOUSEHOLD_ID = 'roxas-c273c98d';
 
 function sharedDocRef(key) {
   return doc(db, 'households', HOUSEHOLD_ID, 'shared', key);
