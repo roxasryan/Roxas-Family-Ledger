@@ -67,19 +67,25 @@ function shiftMonth(ym, delta) {
 // (not including) the current real-world month, using today's category limits.
 // Recomputed fresh every render from actual transactions — nothing is stored
 // as a running total, so editing a past expense can never leave it out of sync.
-function computeRollover(categories, transactions, startMonth, currentRealMonth) {
-  if (!startMonth || startMonth >= currentRealMonth) return 0;
-  const totalBudget = categories.reduce((a, c) => a + c.limit, 0);
-  let rollover = 0;
+// Returns both the overall total and a per-category breakdown; the two are
+// always consistent since they're computed from the same month-by-month pass.
+function computeRolloverBreakdown(categories, transactions, startMonth, currentRealMonth) {
+  const byCategory = categories.map(c => ({ id: c.id, name: c.name, color: c.color, rollover: 0 }));
+  if (!startMonth || startMonth >= currentRealMonth) return { total: 0, byCategory };
+  const byId = Object.fromEntries(byCategory.map(c => [c.id, c]));
   let m = startMonth;
   let guard = 0;
   while (m < currentRealMonth && guard < 600) { // guard: 50 years, just in case of bad data
-    const spent = transactions.filter(t => t.date.slice(0, 7) === m).reduce((a, t) => a + t.amount, 0);
-    rollover += (totalBudget - spent);
+    const monthTx = transactions.filter(t => t.date.slice(0, 7) === m);
+    categories.forEach(c => {
+      const spent = monthTx.filter(t => t.categoryId === c.id).reduce((a, t) => a + t.amount, 0);
+      byId[c.id].rollover += (c.limit - spent);
+    });
     m = shiftMonth(m, 1);
     guard++;
   }
-  return rollover;
+  const total = byCategory.reduce((a, c) => a + c.rollover, 0);
+  return { total, byCategory };
 }
 
 function formatMonth(ym) {
@@ -415,6 +421,7 @@ export default function BudgetTracker() {
   const [paymentMethods, setPaymentMethods] = useState(DEFAULT_PAYMENT_METHODS);
   const [currency, setCurrency] = useState('$');
   const [rolloverStartMonth, setRolloverStartMonth] = useState('');
+  const [showRolloverDetail, setShowRolloverDetail] = useState(false);
   const [userName, setUserName] = useState('');
   const [nameDraft, setNameDraft] = useState('');
   const [tab, setTab] = useState('dashboard');
@@ -526,7 +533,8 @@ export default function BudgetTracker() {
   const totalSpent = Object.values(spendByCat).reduce((a, b) => a + b, 0);
   const totalBudget = categories.reduce((a, c) => a + c.limit, 0);
   const overallPct = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
-  const rolloverBalance = computeRollover(categories, transactions, rolloverStartMonth, todayStr().slice(0, 7));
+  const rolloverBreakdown = computeRolloverBreakdown(categories, transactions, rolloverStartMonth, todayStr().slice(0, 7));
+  const rolloverBalance = rolloverBreakdown.total;
   const warnings = categories
     .map(c => ({ c, spent: spendByCat[c.id] || 0, pct: c.limit > 0 ? ((spendByCat[c.id] || 0) / c.limit) * 100 : 0 }))
     .filter(x => x.pct >= 80)
@@ -637,7 +645,7 @@ export default function BudgetTracker() {
     .sort((a, b) => b.date.localeCompare(a.date) || 0);
 
   const handleExport = () => {
-    const payload = { exportedAt: new Date().toISOString(), categories, transactions, paymentMethods, householdMembers, currency, pin, securityQuestion };
+    const payload = { exportedAt: new Date().toISOString(), categories, transactions, paymentMethods, householdMembers, currency, pin, securityQuestion, rolloverStartMonth };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -751,6 +759,7 @@ export default function BudgetTracker() {
     if (importPending.currency) saveCurrency(importPending.currency);
     if (typeof importPending.pin === 'string') savePin(importPending.pin);
     if (importPending.securityQuestion) saveSecurityQuestion(importPending.securityQuestion);
+    if (typeof importPending.rolloverStartMonth === 'string') saveRolloverStart(importPending.rolloverStartMonth);
     setImportPending(null);
   };
 
@@ -877,7 +886,7 @@ export default function BudgetTracker() {
               </div>
             </div>
 
-            <button onClick={() => setTab('settings')} className="w-full text-left rounded-xl p-3.5 mb-4 border flex items-center gap-3"
+            <button onClick={() => setShowRolloverDetail(true)} className="w-full text-left rounded-xl p-3.5 mb-4 border flex items-center gap-3"
               style={{ backgroundColor: rolloverBalance < 0 ? '#F4E3DF' : C.card, borderColor: rolloverBalance < 0 ? C.brick : C.line }}>
               <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: rolloverBalance < 0 ? C.brick : C.sage }}>
                 <PiggyBank size={18} color="#fff" />
@@ -891,6 +900,7 @@ export default function BudgetTracker() {
               <div className="text-lg font-semibold shrink-0" style={{ color: rolloverBalance < 0 ? C.brick : C.sage, fontFamily: "'IBM Plex Mono', monospace" }}>
                 {rolloverBalance < 0 ? '-' : '+'}{fmtMoney(Math.abs(rolloverBalance), currency)}
               </div>
+              <ChevronRight size={16} color={rolloverBalance < 0 ? C.brick : C.inkSoft} className="shrink-0" style={{ opacity: 0.6 }} />
             </button>
 
             <div className="space-y-2.5">
@@ -1264,6 +1274,50 @@ export default function BudgetTracker() {
             </div>
             <ExpenseForm categories={categories} members={householdMembers} paymentMethods={paymentMethods} currency={currency}
               defaultMember={userName} initial={editingTx} onSubmit={(data) => updateTransaction(editingTx.id, data)} onCancel={() => setEditingTx(null)} />
+          </div>
+        </div>
+      )}
+
+      {showRolloverDetail && (
+        <div className="fixed inset-0 z-20 flex items-end sm:items-center justify-center p-0 sm:p-4" style={{ backgroundColor: 'rgba(34,48,63,0.5)' }}>
+          <div className="w-full max-w-md rounded-t-2xl sm:rounded-2xl p-5 max-h-[90vh] overflow-y-auto" style={{ backgroundColor: C.paper }}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-semibold flex items-center gap-2" style={{ color: C.ink, fontFamily: "'Fraunces', serif" }}>
+                <PiggyBank size={18} /> Budget Rollover
+              </span>
+              <button onClick={() => setShowRolloverDetail(false)}><X size={18} color={C.inkSoft} /></button>
+            </div>
+            <p className="text-xs mb-4" style={{ color: C.inkSoft }}>
+              {rolloverStartMonth ? `Since ${formatMonth(rolloverStartMonth)}, through last month.` : 'Not started yet — set a start month in Settings.'}
+            </p>
+
+            <div className="rounded-xl p-4 mb-4 border" style={{ backgroundColor: rolloverBalance < 0 ? '#F4E3DF' : C.paperAlt, borderColor: rolloverBalance < 0 ? C.brick : C.line }}>
+              <div className="text-xs mb-1" style={{ color: rolloverBalance < 0 ? C.brick : C.inkSoft }}>Total</div>
+              <div className="text-2xl font-semibold" style={{ color: rolloverBalance < 0 ? C.brick : C.sage, fontFamily: "'IBM Plex Mono', monospace" }}>
+                {rolloverBalance < 0 ? '-' : '+'}{fmtMoney(Math.abs(rolloverBalance), currency)}
+              </div>
+            </div>
+
+            <div className="text-xs font-medium mb-2" style={{ color: C.inkSoft }}>By category</div>
+            <div className="space-y-2">
+              {rolloverBreakdown.byCategory.map(c => (
+                <div key={c.id} className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 border" style={{ borderColor: C.line, backgroundColor: C.card }}>
+                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: c.color }} />
+                  <span className="flex-1 text-sm truncate" style={{ color: C.ink }}>{c.name}</span>
+                  <span className="text-sm font-medium shrink-0" style={{ color: c.rollover < 0 ? C.brick : C.sage, fontFamily: "'IBM Plex Mono', monospace" }}>
+                    {c.rollover < 0 ? '-' : '+'}{fmtMoney(Math.abs(c.rollover), currency)}
+                  </span>
+                </div>
+              ))}
+              {rolloverBreakdown.byCategory.length === 0 && (
+                <p className="text-sm" style={{ color: C.inkSoft }}>No categories yet.</p>
+              )}
+            </div>
+
+            <button onClick={() => { setShowRolloverDetail(false); setTab('settings'); }}
+              className="w-full mt-4 rounded-lg py-2.5 text-sm font-medium border" style={{ borderColor: C.line, color: C.ink }}>
+              Change start month in Settings
+            </button>
           </div>
         </div>
       )}
