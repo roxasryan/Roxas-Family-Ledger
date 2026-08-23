@@ -669,6 +669,7 @@ export default function BudgetTracker() {
       [],
       ['What\u2019s on each tab:'],
       ['Summary', `This month's (${monthLabel}) spending vs. limits by category — laid out ready to chart.`],
+      ['Rollover', 'Saved-up or overspent budget from past months, broken down by category.'],
       ['Transactions', 'Every expense logged, with category, payment method, and who logged it.'],
       ['Categories', 'Your categories and their monthly limits.'],
       ['Payment Methods', 'Cards and accounts you\u2019ve set up.'],
@@ -692,6 +693,18 @@ export default function BudgetTracker() {
     ];
     const summaryWs = XLSX.utils.aoa_to_sheet(summaryAoa);
     summaryWs['!cols'] = [{ wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 16 }];
+
+    // Rollover
+    const rolloverAoa = [
+      [rolloverStartMonth ? `Budget Rollover \u2014 since ${formatMonth(rolloverStartMonth)}, through last month` : 'Budget Rollover \u2014 no start month set yet'],
+      [],
+      ['Category', `Rollover (${currency})`],
+      ...rolloverBreakdown.byCategory.map(c => [c.name, Number(c.rollover.toFixed(2))]),
+      [],
+      ['Total', Number(rolloverBreakdown.total.toFixed(2))],
+    ];
+    const rolloverWs = XLSX.utils.aoa_to_sheet(rolloverAoa);
+    rolloverWs['!cols'] = [{ wch: 20 }, { wch: 16 }];
 
     // Transactions
     const txRows = [...transactions]
@@ -730,6 +743,7 @@ export default function BudgetTracker() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, readMeWs, 'Read Me');
     XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
+    XLSX.utils.book_append_sheet(wb, rolloverWs, 'Rollover');
     XLSX.utils.book_append_sheet(wb, txWs, 'Transactions');
     XLSX.utils.book_append_sheet(wb, catWs, 'Categories');
     XLSX.utils.book_append_sheet(wb, pmWs, 'Payment Methods');
@@ -1205,7 +1219,7 @@ export default function BudgetTracker() {
                   <button onClick={handleExportSpreadsheet} className="w-full rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-2" style={{ backgroundColor: C.navy, color: C.paper }}>
                     <FileSpreadsheet size={16} /> Export as spreadsheet (.xlsx)
                   </button>
-                  <p className="text-xs" style={{ color: C.inkSoft }}>Opens in Excel, Google Sheets, or Numbers — a Read Me, a chart-ready Summary tab for this month, plus Transactions, Categories, Payment Methods, and Household.</p>
+                  <p className="text-xs" style={{ color: C.inkSoft }}>Opens in Excel, Google Sheets, or Numbers — a Read Me, a chart-ready Summary tab, a Rollover breakdown, plus Transactions, Categories, Payment Methods, and Household.</p>
                   <div className="flex gap-2 pt-2 mt-1 border-t" style={{ borderColor: C.line }}>
                     <button onClick={handleExport} className="flex-1 rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-2 border" style={{ borderColor: C.line, color: C.ink }}>
                       <Download size={16} /> Export backup
