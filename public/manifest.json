@@ -1,0 +1,14 @@
+{
+  "name": "Roxas Family Ledger",
+  "short_name": "Roxas Ledger",
+  "description": "Shared household budget tracker",
+  "start_url": "/Roxas-Family-Ledger/",
+  "scope": "/Roxas-Family-Ledger/",
+  "display": "standalone",
+  "background_color": "#F6F1E7",
+  "theme_color": "#0E7C5A",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
