@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import {
   Plus, Trash2, Pencil, ChevronLeft, ChevronRight, AlertTriangle,
   Home, List, Settings as SettingsIcon, X, Check, User, Wallet,
-  Users, CreditCard, Download, Upload, ShieldAlert, Lock, FileSpreadsheet, GripVertical
+  Users, CreditCard, Download, Upload, ShieldAlert, Lock, FileSpreadsheet, GripVertical, PiggyBank
 } from 'lucide-react';
 import { ensureSignedIn } from './firebase';
 import { subscribeShared, setShared, getPersonal, setPersonal } from './storage';
@@ -61,6 +61,25 @@ function shiftMonth(ym, delta) {
   const [y, m] = ym.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+// Sums (budget - spent) for every fully-completed month from startMonth up to
+// (not including) the current real-world month, using today's category limits.
+// Recomputed fresh every render from actual transactions — nothing is stored
+// as a running total, so editing a past expense can never leave it out of sync.
+function computeRollover(categories, transactions, startMonth, currentRealMonth) {
+  if (!startMonth || startMonth >= currentRealMonth) return 0;
+  const totalBudget = categories.reduce((a, c) => a + c.limit, 0);
+  let rollover = 0;
+  let m = startMonth;
+  let guard = 0;
+  while (m < currentRealMonth && guard < 600) { // guard: 50 years, just in case of bad data
+    const spent = transactions.filter(t => t.date.slice(0, 7) === m).reduce((a, t) => a + t.amount, 0);
+    rollover += (totalBudget - spent);
+    m = shiftMonth(m, 1);
+    guard++;
+  }
+  return rollover;
 }
 
 function formatMonth(ym) {
@@ -395,6 +414,7 @@ export default function BudgetTracker() {
   const [householdMembers, setHouseholdMembers] = useState([]);
   const [paymentMethods, setPaymentMethods] = useState(DEFAULT_PAYMENT_METHODS);
   const [currency, setCurrency] = useState('$');
+  const [rolloverStartMonth, setRolloverStartMonth] = useState('');
   const [userName, setUserName] = useState('');
   const [nameDraft, setNameDraft] = useState('');
   const [tab, setTab] = useState('dashboard');
@@ -437,7 +457,7 @@ export default function BudgetTracker() {
     let unsub = () => {};
     ensureSignedIn(() => {
       const loadedKeys = new Set();
-      const expectedKeys = ['categories', 'transactions', 'household-members', 'payment-methods', 'currency', 'app-pin', 'security-qa'];
+      const expectedKeys = ['categories', 'transactions', 'household-members', 'payment-methods', 'currency', 'app-pin', 'security-qa', 'rollover-start'];
       const markLoaded = (key, err) => {
         loadedKeys.add(key);
         if (err) setLoadError(err.message || String(err));
@@ -452,6 +472,7 @@ export default function BudgetTracker() {
         subscribeShared('currency', (v, err) => { if (v) setCurrency(v); markLoaded('currency', err); }),
         subscribeShared('app-pin', (v, err) => { setPin(v || ''); markLoaded('app-pin', err); }),
         subscribeShared('security-qa', (v, err) => { if (v) setSecurityQuestion(JSON.parse(v)); markLoaded('security-qa', err); }),
+        subscribeShared('rollover-start', (v, err) => { setRolloverStartMonth(v || todayStr().slice(0, 7)); markLoaded('rollover-start', err); }),
       ];
       unsub = () => unsubs.forEach(u => u());
     });
@@ -481,6 +502,7 @@ export default function BudgetTracker() {
   const saveCategories = useCallback((next) => { setCategories(next); setShared('categories', JSON.stringify(next)); }, []);
   const saveTransactions = useCallback((next) => { setTransactions(next); setShared('transactions', JSON.stringify(next)); }, []);
   const saveCurrency = useCallback((next) => { setCurrency(next); setShared('currency', next); }, []);
+  const saveRolloverStart = useCallback((next) => { setRolloverStartMonth(next); setShared('rollover-start', next); }, []);
   const savePin = useCallback((next) => { setPin(next); setShared('app-pin', next); }, []);
   const saveSecurityQuestion = useCallback((next) => { setSecurityQuestion(next); setShared('security-qa', JSON.stringify(next)); }, []);
   const savePaymentMethods = useCallback((next) => { setPaymentMethods(next); setShared('payment-methods', JSON.stringify(next)); }, []);
@@ -504,6 +526,7 @@ export default function BudgetTracker() {
   const totalSpent = Object.values(spendByCat).reduce((a, b) => a + b, 0);
   const totalBudget = categories.reduce((a, c) => a + c.limit, 0);
   const overallPct = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
+  const rolloverBalance = computeRollover(categories, transactions, rolloverStartMonth, todayStr().slice(0, 7));
   const warnings = categories
     .map(c => ({ c, spent: spendByCat[c.id] || 0, pct: c.limit > 0 ? ((spendByCat[c.id] || 0) / c.limit) * 100 : 0 }))
     .filter(x => x.pct >= 80)
@@ -839,31 +862,54 @@ export default function BudgetTracker() {
               </div>
             )}
 
-            <div className="rounded-xl p-4 mb-4 border" style={{ backgroundColor: C.card, borderColor: C.line }}>
+            <div className="rounded-xl p-4 mb-4 border" style={{
+              backgroundColor: overallPct >= 100 ? '#F4E3DF' : C.card,
+              borderColor: overallPct >= 100 ? C.brick : C.line,
+            }}>
               <div className="flex items-baseline justify-between mb-1">
-                <span className="text-xs" style={{ color: C.inkSoft }}>Spent this month</span>
-                <span className="text-xs" style={{ color: C.inkSoft }}>Budget {fmtMoney(totalBudget, currency)}</span>
+                <span className="text-xs" style={{ color: overallPct >= 100 ? C.brick : C.inkSoft }}>Spent this month</span>
+                <span className="text-xs" style={{ color: overallPct >= 100 ? C.brick : C.inkSoft }}>Budget {fmtMoney(totalBudget, currency)}</span>
               </div>
-              <div className="text-3xl font-semibold mb-3" style={{ color: C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtMoney(totalSpent, currency)}</div>
+              <div className="text-3xl font-semibold mb-3" style={{ color: overallPct >= 100 ? C.brick : C.ink, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtMoney(totalSpent, currency)}</div>
               <ProgressBar pct={overallPct} color={statusColor(overallPct)} />
-              <div className="text-xs mt-1.5" style={{ color: C.inkSoft }}>
+              <div className="text-xs mt-1.5" style={{ color: overallPct >= 100 ? C.brick : C.inkSoft }}>
                 {totalSpent <= totalBudget ? `${fmtMoney(totalBudget - totalSpent, currency)} left to spend` : `${fmtMoney(totalSpent - totalBudget, currency)} over overall budget`}
               </div>
             </div>
+
+            <button onClick={() => setTab('settings')} className="w-full text-left rounded-xl p-3.5 mb-4 border flex items-center gap-3"
+              style={{ backgroundColor: rolloverBalance < 0 ? '#F4E3DF' : C.card, borderColor: rolloverBalance < 0 ? C.brick : C.line }}>
+              <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: rolloverBalance < 0 ? C.brick : C.sage }}>
+                <PiggyBank size={18} color="#fff" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs" style={{ color: rolloverBalance < 0 ? C.brick : C.inkSoft }}>Budget Rollover</div>
+                <div className="text-sm" style={{ color: rolloverBalance < 0 ? C.brick : C.inkSoft }}>
+                  {rolloverBalance < 0 ? 'Past overspending — comes out of future budget' : 'Saved from past months, on top of this month'}
+                </div>
+              </div>
+              <div className="text-lg font-semibold shrink-0" style={{ color: rolloverBalance < 0 ? C.brick : C.sage, fontFamily: "'IBM Plex Mono', monospace" }}>
+                {rolloverBalance < 0 ? '-' : '+'}{fmtMoney(Math.abs(rolloverBalance), currency)}
+              </div>
+            </button>
 
             <div className="space-y-2.5">
               {categories.map(c => {
                 const spent = spendByCat[c.id] || 0;
                 const pct = c.limit > 0 ? (spent / c.limit) * 100 : 0;
+                const over = pct >= 100;
                 return (
                   <button key={c.id} onClick={() => { setFilterCategory(c.id); setTab('transactions'); }}
-                    className="w-full text-left rounded-xl p-3.5 border block" style={{ backgroundColor: C.card, borderColor: C.line }}>
+                    className="w-full text-left rounded-xl p-3.5 border block" style={{
+                      backgroundColor: over ? '#F4E3DF' : C.card,
+                      borderColor: over ? C.brick : C.line,
+                    }}>
                     <div className="flex items-center justify-between mb-1.5">
                       <div className="flex items-center gap-2 min-w-0">
                         <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: c.color }} />
-                        <span className="font-medium truncate" style={{ color: C.ink }}>{c.name}</span>
+                        <span className="font-medium truncate" style={{ color: over ? C.brick : C.ink }}>{c.name}</span>
                       </div>
-                      <span className="text-sm shrink-0" style={{ color: C.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
+                      <span className="text-sm shrink-0" style={{ color: over ? C.brick : C.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>
                         {fmtMoney(spent, currency)} / {fmtMoney(c.limit, currency)}
                       </span>
                     </div>
@@ -990,6 +1036,19 @@ export default function BudgetTracker() {
               <div className="font-medium mb-3" style={{ color: C.ink }}>Currency symbol</div>
               <input value={currency} maxLength={3} onChange={e => saveCurrency(e.target.value || '$')}
                 className="w-20 rounded-lg px-3 py-2 border text-sm text-center" style={{ borderColor: C.line, backgroundColor: C.paper, color: C.ink }} />
+            </div>
+
+            <div className="rounded-xl p-4 border" style={{ backgroundColor: C.card, borderColor: C.line }}>
+              <div className="font-medium mb-2 flex items-center gap-2" style={{ color: C.ink }}><PiggyBank size={16} /> Budget Rollover</div>
+              <p className="text-xs mb-3" style={{ color: C.inkSoft }}>
+                Adds up (budget minus spent) for every completed month from the date below through last month — under budget adds to the total, over budget subtracts from it. This month itself isn't counted yet since it's still in progress. Recalculated fresh each time, so editing an old expense keeps it accurate.
+              </p>
+              <label className="block text-xs mb-1" style={{ color: C.inkSoft }}>Start counting from</label>
+              <input type="month" value={rolloverStartMonth} onChange={e => saveRolloverStart(e.target.value)}
+                className="rounded-lg px-3 py-2 border text-sm" style={{ borderColor: C.line, backgroundColor: C.paper, color: C.ink }} />
+              <p className="text-xs mt-2" style={{ color: C.inkSoft }}>
+                Current balance: <span style={{ color: rolloverBalance < 0 ? C.brick : C.sage, fontWeight: 600 }}>{rolloverBalance < 0 ? '-' : '+'}{fmtMoney(Math.abs(rolloverBalance), currency)}</span>
+              </p>
             </div>
 
             <div className="rounded-xl p-4 border" style={{ backgroundColor: C.card, borderColor: C.line }}>
