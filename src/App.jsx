@@ -387,6 +387,8 @@ function TransactionRow({ tx, category, paymentMethod, currency, onEdit, onDelet
 /* ---------- Main App ---------- */
 export default function BudgetTracker() {
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [loadTimedOut, setLoadTimedOut] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [transactions, setTransactions] = useState([]);
@@ -429,30 +431,41 @@ export default function BudgetTracker() {
   // Real-time sync: each shared key gets its own live subscription. Firestore
   // pushes updates the moment either device writes — no polling, no manual
   // refresh button needed. `ready` flips true once every key has reported at
-  // least once (from cache or server), same as the old "initial load" moment.
+  // least once (from cache or server, success or error), same as the old
+  // "initial load" moment.
   useEffect(() => {
     let unsub = () => {};
     ensureSignedIn(() => {
       const loadedKeys = new Set();
       const expectedKeys = ['categories', 'transactions', 'household-members', 'payment-methods', 'currency', 'app-pin', 'security-qa'];
-      const markLoaded = (key) => {
+      const markLoaded = (key, err) => {
         loadedKeys.add(key);
+        if (err) setLoadError(err.message || String(err));
         if (expectedKeys.every(k => loadedKeys.has(k))) setReady(true);
       };
 
       const unsubs = [
-        subscribeShared('categories', (v) => { if (v) setCategories(JSON.parse(v)); markLoaded('categories'); }),
-        subscribeShared('transactions', (v) => { if (v) setTransactions(JSON.parse(v)); markLoaded('transactions'); }),
-        subscribeShared('household-members', (v) => { if (v) setHouseholdMembers(JSON.parse(v)); markLoaded('household-members'); }),
-        subscribeShared('payment-methods', (v) => { if (v) setPaymentMethods(JSON.parse(v)); markLoaded('payment-methods'); }),
-        subscribeShared('currency', (v) => { if (v) setCurrency(v); markLoaded('currency'); }),
-        subscribeShared('app-pin', (v) => { setPin(v || ''); markLoaded('app-pin'); }),
-        subscribeShared('security-qa', (v) => { if (v) setSecurityQuestion(JSON.parse(v)); markLoaded('security-qa'); }),
+        subscribeShared('categories', (v, err) => { if (v) setCategories(JSON.parse(v)); markLoaded('categories', err); }),
+        subscribeShared('transactions', (v, err) => { if (v) setTransactions(JSON.parse(v)); markLoaded('transactions', err); }),
+        subscribeShared('household-members', (v, err) => { if (v) setHouseholdMembers(JSON.parse(v)); markLoaded('household-members', err); }),
+        subscribeShared('payment-methods', (v, err) => { if (v) setPaymentMethods(JSON.parse(v)); markLoaded('payment-methods', err); }),
+        subscribeShared('currency', (v, err) => { if (v) setCurrency(v); markLoaded('currency', err); }),
+        subscribeShared('app-pin', (v, err) => { setPin(v || ''); markLoaded('app-pin', err); }),
+        subscribeShared('security-qa', (v, err) => { if (v) setSecurityQuestion(JSON.parse(v)); markLoaded('security-qa', err); }),
       ];
       unsub = () => unsubs.forEach(u => u());
     });
     return () => unsub();
   }, []);
+
+  // If loading hasn't finished within 8 seconds, stop spinning silently and
+  // show something actionable — almost always means a Firebase setup step
+  // (rules, anonymous auth, or a mismatched household ID) needs a look.
+  useEffect(() => {
+    if (ready) return;
+    const t = setTimeout(() => setLoadTimedOut(true), 8000);
+    return () => clearTimeout(t);
+  }, [ready]);
 
   useEffect(() => {
     const name = getPersonal('user-name');
@@ -736,7 +749,7 @@ export default function BudgetTracker() {
 
   if (!ready || !splashDone) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4" style={{ backgroundColor: C.navy }}>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-6" style={{ backgroundColor: C.navy }}>
         <style>{`
           @keyframes ledger-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
           @keyframes ledger-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
@@ -747,11 +760,26 @@ export default function BudgetTracker() {
         <div className="text-center" style={{ animation: 'ledger-fade-in 0.5s ease-out 0.1s both' }}>
           <div className="text-lg font-semibold tracking-wide" style={{ color: C.paper, fontFamily: "'Fraunces', serif" }}>Roxas Family Ledger</div>
         </div>
-        <div className="flex gap-1.5 mt-2">
-          {[0, 1, 2].map(i => (
-            <div key={i} className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: C.gold, animation: `ledger-pulse 1.1s ease-in-out ${i * 0.15}s infinite` }} />
-          ))}
-        </div>
+        {!ready && loadTimedOut ? (
+          <div className="max-w-xs text-center mt-2">
+            <p className="text-sm mb-2" style={{ color: C.paper }}>This is taking longer than it should.</p>
+            <p className="text-xs mb-3" style={{ color: C.gold, opacity: 0.85 }}>
+              Usually means a Firebase setup step needs a check: Firestore rules published, Anonymous sign-in enabled, and the household ID in storage.js matching your rules exactly.
+            </p>
+            {loadError && (
+              <p className="text-xs mb-3 font-mono" style={{ color: '#F4B8A8' }}>{loadError}</p>
+            )}
+            <button onClick={() => window.location.reload()} className="text-xs font-medium px-4 py-2 rounded-lg" style={{ backgroundColor: C.gold, color: C.navy }}>
+              Try again
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-1.5 mt-2">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: C.gold, animation: `ledger-pulse 1.1s ease-in-out ${i * 0.15}s infinite` }} />
+            ))}
+          </div>
+        )}
       </div>
     );
   }

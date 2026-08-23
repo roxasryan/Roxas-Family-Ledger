@@ -16,15 +16,20 @@ function sharedDocRef(key) {
   return doc(db, 'households', HOUSEHOLD_ID, 'shared', key);
 }
 
-// Subscribes to a shared key. Calls `callback(value)` immediately with
-// the current value (or null if it doesn't exist yet), and again every
-// time either device changes it — this is what gives real-time sync
-// instead of polling. Returns an unsubscribe function.
+// Subscribes to a shared key. Calls `callback(value, error)` immediately
+// with the current value (or null if it doesn't exist yet, or on error),
+// and again every time either device changes it — this is what gives
+// real-time sync instead of polling. Returns an unsubscribe function.
+//
+// Important: the error case still calls `callback`, just with an error
+// attached. If it didn't, a misconfigured Firestore rule or a missing
+// anonymous-auth setup would leave the app waiting forever with no
+// visible sign anything was wrong.
 export function subscribeShared(key, callback) {
   return onSnapshot(
     sharedDocRef(key),
-    (snap) => callback(snap.exists() ? snap.data().value : null),
-    (error) => console.error('Subscribe failed for', key, error)
+    (snap) => callback(snap.exists() ? snap.data().value : null, null),
+    (error) => { console.error('Subscribe failed for', key, error); callback(null, error); }
   );
 }
 
